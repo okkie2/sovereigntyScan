@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import emailjs from '@emailjs/browser';
 import { AnswerMap, calculateScore, questions } from './assessmentConfig';
 import { trackEvent } from './analytics';
 import { saveLead, type LeadSubmission } from './leadStorage';
@@ -6,6 +7,10 @@ import { saveLead, type LeadSubmission } from './leadStorage';
 type View = 'intro' | 'assessment' | 'loading' | 'results';
 
 const LOADING_DURATION_MS = 2000;
+
+const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
 
 export const App: React.FC = () => {
   const [view, setView] = useState<View>('intro');
@@ -15,7 +20,6 @@ export const App: React.FC = () => {
 
   const [firstName, setFirstName] = useState('');
   const [email, setEmail] = useState('');
-  const [organisation, setOrganisation] = useState('');
   const [wantsWhitepaper, setWantsWhitepaper] = useState(false);
   const [wantsContact, setWantsContact] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -84,7 +88,6 @@ export const App: React.FC = () => {
     setFormSuccess(null);
     setFirstName('');
     setEmail('');
-    setOrganisation('');
     setWantsWhitepaper(false);
     setWantsContact(false);
   };
@@ -94,15 +97,51 @@ export const App: React.FC = () => {
     setFormError(null);
     setFormSuccess(null);
 
-    if (!firstName.trim() || !email.trim() || !organisation.trim()) {
-      setFormError('Please provide your name, work email and organisation.');
+    const trimmedName = firstName.trim();
+    const trimmedEmail = email.trim();
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!trimmedName || !trimmedEmail) {
+      setFormError('Please provide your name and work email.');
       return;
     }
 
+    if (!emailPattern.test(trimmedEmail)) {
+      setFormError('Please enter a valid work email address.');
+      return;
+    }
+
+    const domainPart = trimmedEmail.split('@')[1] ?? '';
+    const tld = domainPart.split('.').pop() ?? '';
+    const commonTlds = new Set([
+      'com',
+      'net',
+      'org',
+      'io',
+      'ai',
+      'co',
+      'nl',
+      'de',
+      'fr',
+      'uk',
+      'eu',
+      'gov',
+      'edu',
+      'info',
+      'biz'
+    ]);
+
+    if (tld.length < 2 || (!commonTlds.has(tld.toLowerCase()) && tld.length > 4)) {
+      setFormError('Please enter a work email address with a valid domain extension.');
+      return;
+    }
+
+    const organisationFromEmail = trimmedEmail.split('@')[1] ?? '';
+
     const submission: LeadSubmission = {
-      firstName: firstName.trim(),
-      email: email.trim(),
-      organisation: organisation.trim(),
+      firstName: trimmedName,
+      email: trimmedEmail,
+      organisation: organisationFromEmail,
       wantsWhitepaper,
       wantsContact,
       submittedAt: new Date().toISOString()
@@ -115,7 +154,32 @@ export const App: React.FC = () => {
       hasContactRequest: wantsContact
     });
 
-    setFormSuccess('Thank you. Your details have been captured.');
+    if (EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY) {
+      // For production, replace this with your preferred email integration.
+      void emailjs
+        .send(
+          EMAILJS_SERVICE_ID,
+          EMAILJS_TEMPLATE_ID,
+          {
+            firstName: submission.firstName,
+            email: submission.email,
+            organisation: submission.organisation,
+            wantsWhitepaper: submission.wantsWhitepaper ? 'Yes' : 'No',
+            wantsContact: submission.wantsContact ? 'Yes' : 'No',
+            score: scoreResult.totalScore,
+            category: scoreResult.category
+          },
+          {
+            publicKey: EMAILJS_PUBLIC_KEY
+          }
+        )
+        .catch(error => {
+          // eslint-disable-next-line no-console
+          console.error('[email] failed_to_send', error);
+        });
+    }
+
+    setFormSuccess('Thank you for your interest. Please expect our response shortly.');
   };
 
   const renderIntro = () => (
@@ -268,36 +332,26 @@ export const App: React.FC = () => {
               <div className="lead-form-title">Continue the conversation</div>
               <div className="form-grid">
                 <div className="form-field">
-                  <label htmlFor="firstName">First name</label>
+                  <label htmlFor="firstName" className="sr-only">First name</label>
                   <input
                     id="firstName"
                     className="form-input"
                     value={firstName}
                     onChange={e => setFirstName(e.target.value)}
-                    placeholder="e.g. Alex"
+                    placeholder="First name"
                   />
                 </div>
                 <div className="form-field">
-                  <label htmlFor="email">Work email</label>
+                  <label htmlFor="email" className="sr-only">Work email</label>
                   <input
                     id="email"
                     className="form-input"
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    placeholder="you@organisation.com"
+                    placeholder="Work email"
                   />
                 </div>
-              </div>
-              <div className="form-field" style={{ marginTop: 10 }}>
-                <label htmlFor="organisation">Organisation</label>
-                <input
-                  id="organisation"
-                  className="form-input"
-                  value={organisation}
-                  onChange={e => setOrganisation(e.target.value)}
-                  placeholder="Organisation name"
-                />
               </div>
 
               <div className="form-checkboxes">
@@ -321,7 +375,7 @@ export const App: React.FC = () => {
 
               <div className="form-footer">
                 <button type="submit" className="primary-button">
-                  Share my details
+                  Proceed
                 </button>
                 <div>
                   {formError && <div className="form-error">{formError}</div>}
